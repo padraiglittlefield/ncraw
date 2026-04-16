@@ -1,0 +1,104 @@
+.Dd April 9, 2026
+.Dt NCRAW 1
+.Os
+.Sh NAME
+.Nm ncraw
+.Nd NiteCrawler Focuser control utility
+.Sh SYNOPSIS
+.Nm
+.Cm where
+.Op Cm focus | rotation
+,
+.Nm
+.Cm focus
+.Ar steps
+,
+.Nm
+.Cm rotate
+.Ar steps
+,
+.Nm
+.Cm stop
+.Op Cm focus | rotation
+,
+.Nm
+.Cm help
+.Sh DESCRIPTION
+.Nm
+is a command-line utility for controlling the NiteCrawler Focuser v1.0.0.
+It allows the user to query and set the focus and rotation positions,
+as well as stop motor movement on one or both axes.
+.Pp
+The following commands are available:
+.Bl -tag -width -indent
+.It Cm where Op Cm focus | rotation
+Show the current focus and rotation position.
+If
+.Cm focus
+or
+.Cm rotation
+is specified, only that axis is reported.
+.It Cm focus Ar steps
+Move the focus motor to the absolute position specified by
+.Ar steps .
+.It Cm rotate Ar steps
+Move the rotation motor to the absolute position specified by
+.Ar steps .
+Negative values rotate in the opposite direction.
+.It Cm stop Op Cm focus | rotation
+Stop both motors immediately.
+If
+.Cm focus
+or
+.Cm rotation
+is specified, only that motor is stopped.
+.It Cm help
+Display a summary of available commands.
+.El
+.Sh EXAMPLES
+Show current position of both axes:
+.Pp
+.Cm ncraw where
+.Pp
+Show only the focus position:
+.Pp
+.Cm ncraw where focus
+.Pp
+Move the focuser to position 500:
+.Pp
+.Cm ncraw focus 500
+.Pp
+Rotate to position \-90:
+.Pp
+.Cm ncraw rotate \-90
+.Pp
+Stop all motors:
+.Pp
+.Cm ncraw stop
+.Pp
+Stop only the rotation motor:
+.Pp
+.Cm ncraw stop rotation
+.Sh ENVIRONMENT
+.Bl -tag -width "NCRAW_DEVICE" -indent
+.It Ev NCRAW_DEVICE
+Overrides the default serial device used to communicate with the focuser.
+If unset,
+.Nm
+defaults to
+.Pa /dev/ttyUSB0 .
+.Pp
+Example:
+.Dl NCRAW_DEVICE=/dev/ttyUSB1 ncraw where
+.El
+.Sh FILES
+.Bl -tag -width "/dev/ttyUSB0" -compact
+.It Pa /dev/ttyUSB0
+Default serial device for the NiteCrawler Focuser.
+.El
+.Sh SEE ALSO
+.Xr stty 1 ,
+.Xr screen 1
+.Sh HISTORY
+.Nm
+version 1.0.0 was written for the NiteCrawler Focuser hardware.

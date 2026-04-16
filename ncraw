@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+# ncraw — NiteCrawler Focuser control
+
+set -euo pipefail
+
+DEVICE="${NCRAW_DEVICE:-/dev/ttyUSB0}"
+BAUD=57600
+VERSION="1.0.0"
+
+# ─── Terminal colors (gracefully disabled if not a TTY) ───────────────────────
+
+if [[ -t 1 ]]; then
+    BOLD=$'\033[1m'; DIM=$'\033[2m'; RESET=$'\033[0m'
+    GREEN=$'\033[32m'; YELLOW=$'\033[33m'; RED=$'\033[31m'; CYAN=$'\033[36m'
+else
+    BOLD=''; DIM=''; RESET=''; GREEN=''; YELLOW=''; RED=''; CYAN=''
+fi
+
+# ─── Output helpers ───────────────────────────────────────────────────────────
+
+info()    { printf "${BOLD}%s${RESET}\n" "$*"; }
+ok()      { printf "${GREEN}✓${RESET}  %s\n" "$*"; }
+err()     { printf "${RED}✗${RESET}  %s\n" "$*" >&2; exit 1; }
+
+# ─── Serial ───────────────────────────────────────────────────────────────────
+
+require_device() {
+    [[ -e "$DEVICE" ]] || err "Focuser not found at ${BOLD}$DEVICE${RESET}
+
+  Is the USB cable connected?
+  Try:  ls /dev/ttyUSB*
+  Then: NCRAW_DEVICE=/dev/ttyUSBX ncraw ..."
+    stty -F "$DEVICE" $BAUD cs8 -cstopb -parenb raw -echo 2>/dev/null \
+        || err "Cannot open $DEVICE — permission denied.
+
+  Fix with:  sudo usermod -aG dialout \$USER
+  Then log out and back in."
+}
+
+send() {
+    # Open device as fd 3 so write and read share the same buffer.
+    # Opening with > alone flushes the input before we can read the reply.
+    local cmd="$1" expect="${2:-0}"
+    exec 3<>"$DEVICE"
+    printf '%s' "$cmd" >&3
+    if [[ "$expect" -eq 1 ]]; then
+        local reply="" char
+        while IFS= read -r -t 2 -n 1 char <&3; do
+            [[ "$char" == "#" ]] && break
+            [[ "$char" == $'\r' ]] && continue
+            reply+="$char"
+        done
+        echo "$reply"
+    fi
+    exec 3>&-
+}
+
+# ─── Argument helpers ─────────────────────────────────────────────────────────
+
+axis() {
+    case "${1,,}" in
+        focus|focuser|f)    echo 1 ;;
+        rotation|rotate|r)  echo 2 ;;
+        *) err "Unknown axis '${1}' — use focus or rotation" ;;
+    esac
+}
+
+axis_name() { [[ "$1" == 1 ]] && echo "Focus" || echo "Rotation"; }
+
+require_integer() {
+    [[ "${1:-}" =~ ^-?[0-9]+$ ]] \
+        || err "'${1:-}' is not a valid step number — use a whole number, e.g. 500 or -200"
+}
+
+# ─── Commands ─────────────────────────────────────────────────────────────────
+
+cmd_where() {
+    require_device
+    if [[ $# -eq 0 ]]; then
+        local fp rp
+        fp=$(send "1GP#" 1)
+        rp=$(send "2GP#" 1)
+        echo
+        info "  NiteCrawler — current position"
+        echo
+        printf "  ${CYAN}%-12s${RESET}  %s\n" "Focus"    "${BOLD}${fp}${RESET}"
+        printf "  ${CYAN}%-12s${RESET}  %s\n" "Rotation" "${BOLD}${rp}${RESET}"
+        echo
+    else
+        local ax; ax=$(axis "$1")
+        local pos; pos=$(send "${ax}GP#" 1)
+        echo
+        printf "  ${CYAN}%-12s${RESET}  %s\n" "$(axis_name "$ax")" "${BOLD}${pos}${RESET}"
+        echo
+    fi
+}
+
+cmd_focus() {
+    [[ $# -ge 1 ]] || err "Specify a step position — example: ncraw focus 500"
+    require_integer "$1"
+    require_device
+    send "1SN ${1}#"
+    send "1SM#"
+    ok "Moving focus to ${BOLD}${1}${RESET}"
+}
+
+cmd_rotate() {
+    [[ $# -ge 1 ]] || err "Specify a step position — example: ncraw rotate 90"
+    require_integer "$1"
+    require_device
+    send "2SN ${1}#"
+    send "2SM#"
+    ok "Moving rotation to ${BOLD}${1}${RESET}"
+}
+
+cmd_stop() {
+    require_device
+    if [[ $# -eq 0 ]]; then
+        send "1SQ#"
+        send "2SQ#"
+        ok "Both motors stopped"
+    else
+        local ax; ax=$(axis "$1")
+        send "${ax}SQ#"
+        ok "$(axis_name "$ax") motor stopped"
+    fi
+}
+
+# ─── Help ─────────────────────────────────────────────────────────────────────
+
+cmd_help() {
+cat <<EOF
+
+  ${BOLD}ncraw${RESET} — NiteCrawler Focuser v${VERSION}
+
+  ${BOLD}USAGE${RESET}
+
+    ncraw where                       Show focus and rotation position
+    ncraw where focus|rotation        Show one axis
+
+    ncraw focus <steps>               Move focus to position
+    ncraw rotate <steps>              Move rotation to position
+
+    ncraw stop                        Stop both motors
+    ncraw stop focus|rotation         Stop one motor
+
+    ncraw help                        Show this help
+
+  ${BOLD}EXAMPLES${RESET}
+
+    ncraw where
+    ncraw focus 500
+    ncraw rotate -90
+    ncraw stop
+
+  ${BOLD}DEVICE${RESET}
+
+    Default: /dev/ttyUSB0
+    Override: NCRAW_DEVICE=/dev/ttyUSB1 ncraw where
+
+EOF
+}
+
+# ─── Entry point ─────────────────────────────────────────────────────────────
+
+main() {
+    [[ $# -ge 1 ]] || { cmd_help; exit 0; }
+
+    local cmd="$1"; shift
+
+    case "$cmd" in
+        where)           cmd_where  "$@" ;;
+        focus)           cmd_focus  "$@" ;;
+        rotate|rotation) cmd_rotate "$@" ;;
+        stop)            cmd_stop   "$@" ;;
+        help|--help|-h)  cmd_help       ;;
+        version|--version|-v) echo "ncraw $VERSION" ;;
+        *) err "Unknown command '${cmd}' — run: ncraw help" ;;
+    esac
+}
+
+main "$@"
