@@ -1,5 +1,5 @@
 # ncraw
-Linux CLI for the Nightcrawler Focuser
+Linux CLI for the NiteCrawler Focuser
 
 ## Install
 
