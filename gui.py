@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QGridLayout, QHBoxLayout, QVBoxLayout,
     QLabel, QLineEdit, QPushButton, QFrame
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QIntValidator
 
 NCRAW_CMD = os.environ.get("NCRAW_CMD", "ncraw")
@@ -162,6 +162,11 @@ class MainWindow(QWidget):
         self._worker = None
         self._run_worker()
 
+        # ── Polling timer (every 0.5 seconds) ───────────────────────────────
+        self._poll_timer = QTimer(self)
+        self._poll_timer.timeout.connect(self._poll_status)
+        self._poll_timer.start(500)  # refresh every 0.5 seconds
+
     # ── Actions ───────────────────────────────────────────────────────────────
 
     def _goto(self, axis, entry):
@@ -174,7 +179,7 @@ class MainWindow(QWidget):
     # ── Worker ────────────────────────────────────────────────────────────────
 
     def _run_worker(self, axis=None, value=None):
-        self._set_status("Working…", "#cc7700")
+        # self._set_status("Working…", "#cc7700")
         self._worker = Worker(axis, value)
         self._worker.done.connect(self._on_done)
         self._worker.start()
@@ -190,6 +195,12 @@ class MainWindow(QWidget):
     def _set_status(self, msg, color="#555555"):
         self._status.setText(msg)
         self._status.setStyleSheet(f"color: {color};")
+
+    def _poll_status(self):
+    # Avoid stacking workers if one is already running
+        if self._worker is not None and self._worker.isRunning():
+            return
+        self._run_worker()
 
 
 if __name__ == "__main__":
