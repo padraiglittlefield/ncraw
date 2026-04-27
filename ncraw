@@ -58,10 +58,12 @@ send() {
 # ─── Argument helpers ─────────────────────────────────────────────────────────
 
 axis() {
-    case "${1,,}" in
+    local a
+    a=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')
+    case "$a" in
         focus|focuser|f)    echo 1 ;;
         rotation|rotate|r)  echo 2 ;;
-        *) err "Unknown axis '${1}' — use focus or rotation" ;;
+        *) err "Unknown axis '${1:-}' — use focus or rotation" ;;
     esac
 }
 
@@ -126,6 +128,23 @@ cmd_stop() {
     fi
 }
 
+cmd_jog() {
+    [[ $# -ge 2 ]] || err "Usage: ncraw jog <focus|rotation> <delta>
+  Examples:
+    ncraw jog focus 100
+    ncraw jog rotation -10"
+    local ax; ax=$(axis "$1")
+    require_integer "$2"
+    require_device
+    local cur; cur=$(send "${ax}GP#" 1)
+    [[ "$cur" =~ ^-?[0-9]+$ ]] \
+        || err "Could not read current $(axis_name "$ax") position (got: '${cur}')"
+    local target=$((cur + $2))
+    send "${ax}SN ${target}#"
+    send "${ax}SM#"
+    ok "Jogging $(axis_name "$ax") by ${BOLD}${2}${RESET} → ${BOLD}${target}${RESET}"
+}
+
 # ─── Help ─────────────────────────────────────────────────────────────────────
 
 cmd_help() {
@@ -144,6 +163,8 @@ cat <<EOF
     ncraw stop                        Stop both motors
     ncraw stop focus|rotation         Stop one motor
 
+    ncraw jog focus|rotation <delta>  Move by a relative amount
+
     ncraw help                        Show this help
 
   ${BOLD}EXAMPLES${RESET}
@@ -151,6 +172,7 @@ cat <<EOF
     ncraw where
     ncraw focus 500
     ncraw rotate -90
+    ncraw jog focus 100
     ncraw stop
 
   ${BOLD}DEVICE${RESET}
@@ -173,6 +195,7 @@ main() {
         focus)           cmd_focus  "$@" ;;
         rotate|rotation) cmd_rotate "$@" ;;
         stop)            cmd_stop   "$@" ;;
+        jog)             cmd_jog    "$@" ;;
         help|--help|-h)  cmd_help       ;;
         version|--version|-v) echo "ncraw $VERSION" ;;
         *) err "Unknown command '${cmd}' — run: ncraw help" ;;

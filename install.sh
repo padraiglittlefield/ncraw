@@ -60,7 +60,8 @@ if [[ -n "$REAL_USER" ]]; then
         msg ""
         read -r -p "  Add $REAL_USER to dialout now? [Y/n] " answer
         answer="${answer:-Y}"
-        if [[ "${answer^^}" == "Y" ]]; then
+        answer=$(printf '%s' "$answer" | tr '[:lower:]' '[:upper:]')
+        if [[ "$answer" == "Y" ]]; then
             usermod -aG dialout "$REAL_USER"
             ok "$REAL_USER added to dialout"
             msg ""

@@ -22,6 +22,11 @@
 .Op Cm focus | rotation
 ,
 .Nm
+.Cm jog
+.Cm focus | rotation
+.Ar delta
+,
+.Nm
 .Cm help
 .Sh DESCRIPTION
 .Nm
@@ -52,6 +57,11 @@ If
 or
 .Cm rotation
 is specified, only that motor is stopped.
+.It Cm jog Cm focus | rotation Ar delta
+Move the specified axis by
+.Ar delta
+steps relative to its current position.
+Negative values move in the opposite direction.
 .It Cm help
 Display a summary of available commands.
 .El
@@ -79,6 +89,10 @@ Stop all motors:
 Stop only the rotation motor:
 .Pp
 .Cm ncraw stop rotation
+.Pp
+Jog the focuser inward by 100 steps:
+.Pp
+.Cm ncraw jog focus \-100
 .Sh ENVIRONMENT
 .Bl -tag -width "NCRAW_DEVICE" -indent
 .It Ev NCRAW_DEVICE

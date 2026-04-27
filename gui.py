@@ -3,15 +3,28 @@
 NiteCrawler Focuser GUI — PyQt5
 """
 
-import sys, os, subprocess
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QGridLayout, QHBoxLayout, QVBoxLayout,
-    QLabel, QLineEdit, QPushButton, QFrame
+    QLabel, QLineEdit, QPushButton, QFrame, QComboBox
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QIntValidator
 
 NCRAW_CMD = os.environ.get("NCRAW_CMD", "ncraw")
+
+STATE_PATH = (
+    Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    / "ncraw" / "gui_state.json"
+)
+
+JOG_STEPS = [1, 10, 100, 1000]
+DEFAULT_JOG_STEP = 100
 
 # ── Serial comms ──────────────────────────────────────────────────────────────
 
@@ -39,14 +52,14 @@ def parse_pos(output, axis):
 class Worker(QThread):
     done = pyqtSignal(bool, str, str)
 
-    def __init__(self, axis=None, value=None):
+    def __init__(self, action_args=None):
         super().__init__()
-        self.axis  = axis
-        self.value = value
+        # action_args: tuple/list of args to pass to `ncraw` before polling, or None
+        self.action_args = tuple(action_args) if action_args else None
 
     def run(self):
-        if self.axis and self.value is not None:
-            ok, out = run_ncraw(self.axis, self.value)
+        if self.action_args:
+            ok, out = run_ncraw(*self.action_args)
             if not ok:
                 self.done.emit(False, out, "")
                 return
@@ -72,6 +85,10 @@ class MainWindow(QWidget):
                                  border: 1px solid #aaaaaa; padding: 6px 16px; }
             QPushButton:hover  { background: #d0d0d0; }
             QPushButton:pressed{ background: #bbbbbb; }
+            QComboBox          { background: #ffffff; color: #1a1a1a;
+                                 border: 1px solid #aaaaaa; padding: 3px 6px; }
+            QComboBox QAbstractItemView { background: #ffffff; color: #1a1a1a;
+                                          selection-background-color: #d0d0d0; }
         """)
 
         root = QVBoxLayout(self)
@@ -139,11 +156,52 @@ class MainWindow(QWidget):
             row.addWidget(btn)
             grid.addLayout(row, 3, col)
 
+            # "jog" label
+            joglbl = QLabel("JOG")
+            joglbl.setFont(QFont("Courier", 7))
+            joglbl.setAlignment(Qt.AlignCenter)
+            grid.addWidget(joglbl, 4, col)
+
+            # jog row: [−] [step ▼] [+]
+            jog_row = QHBoxLayout()
+            jog_row.setSpacing(6)
+
+            minus_btn = QPushButton("−")
+            minus_btn.setFont(QFont("Courier", 13, QFont.Bold))
+            minus_btn.setFixedWidth(40)
+
+            step_combo = QComboBox()
+            step_combo.setFont(QFont("Courier", 10, QFont.Bold))
+            for s in JOG_STEPS:
+                step_combo.addItem(str(s), s)
+            default_idx = step_combo.findData(DEFAULT_JOG_STEP)
+            if default_idx >= 0:
+                step_combo.setCurrentIndex(default_idx)
+            step_combo.setFixedWidth(80)
+
+            plus_btn = QPushButton("+")
+            plus_btn.setFont(QFont("Courier", 13, QFont.Bold))
+            plus_btn.setFixedWidth(40)
+
+            jog_row.addStretch()
+            jog_row.addWidget(minus_btn)
+            jog_row.addWidget(step_combo)
+            jog_row.addWidget(plus_btn)
+            jog_row.addStretch()
+            grid.addLayout(jog_row, 5, col)
+
             setattr(self, f"_{suffix}_disp",  disp)
             setattr(self, f"_{suffix}_entry", entry)
+            setattr(self, f"_{suffix}_step",  step_combo)
 
             btn.clicked.connect(lambda _, c=cmd, e=entry: self._goto(c, e))
             entry.returnPressed.connect(lambda c=cmd, e=entry: self._goto(c, e))
+            minus_btn.clicked.connect(
+                lambda _, c=cmd, sc=step_combo: self._jog(c, -int(sc.currentData()))
+            )
+            plus_btn.clicked.connect(
+                lambda _, c=cmd, sc=step_combo: self._jog(c, +int(sc.currentData()))
+            )
 
         line2 = QFrame(); line2.setFrameShape(QFrame.HLine)
         line2.setStyleSheet("color: #aaaaaa;")
@@ -155,6 +213,9 @@ class MainWindow(QWidget):
         self._status.setStyleSheet("color: #555555;")
         self._status.setAlignment(Qt.AlignCenter)
         root.addWidget(self._status)
+
+        # Restore persisted state before locking the size
+        self._load_state()
 
         self.adjustSize()
         self.setFixedSize(self.sizeHint())
@@ -174,13 +235,17 @@ class MainWindow(QWidget):
         if not val:
             self._set_status("Enter a step value first", "#cc7700")
             return
-        self._run_worker(axis=axis, value=val)
+        self._run_worker((axis, val))
+
+    def _jog(self, axis, delta):
+        # axis is the GUI/CLI axis name ("focus" or "rotate"); the bash CLI
+        # accepts "focus" / "rotation" / "rotate" via its axis() helper.
+        self._run_worker(("jog", axis, str(delta)))
 
     # ── Worker ────────────────────────────────────────────────────────────────
 
-    def _run_worker(self, axis=None, value=None):
-        # self._set_status("Working…", "#cc7700")
-        self._worker = Worker(axis, value)
+    def _run_worker(self, action_args=None):
+        self._worker = Worker(action_args)
         self._worker.done.connect(self._on_done)
         self._worker.start()
 
@@ -197,10 +262,56 @@ class MainWindow(QWidget):
         self._status.setStyleSheet(f"color: {color};")
 
     def _poll_status(self):
-    # Avoid stacking workers if one is already running
+        # Avoid stacking workers if one is already running
         if self._worker is not None and self._worker.isRunning():
             return
         self._run_worker()
+
+    # ── Persistence ───────────────────────────────────────────────────────────
+
+    def _load_state(self):
+        try:
+            with open(STATE_PATH) as f:
+                state = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return
+
+        foc_target = state.get("focus_target", "")
+        rot_target = state.get("rotation_target", "")
+        if isinstance(foc_target, (str, int)):
+            self._foc_entry.setText(str(foc_target))
+        if isinstance(rot_target, (str, int)):
+            self._rot_entry.setText(str(rot_target))
+
+        for suffix, key in (("foc", "focus_jog_step"), ("rot", "rotation_jog_step")):
+            combo = getattr(self, f"_{suffix}_step", None)
+            if combo is None:
+                continue
+            try:
+                step = int(state.get(key, DEFAULT_JOG_STEP))
+            except (TypeError, ValueError):
+                continue
+            idx = combo.findData(step)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+
+    def _save_state(self):
+        state = {
+            "focus_target":      self._foc_entry.text().strip(),
+            "rotation_target":   self._rot_entry.text().strip(),
+            "focus_jog_step":    int(self._foc_step.currentData()),
+            "rotation_jog_step": int(self._rot_step.currentData()),
+        }
+        try:
+            STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with open(STATE_PATH, "w") as f:
+                json.dump(state, f, indent=2)
+        except OSError:
+            pass
+
+    def closeEvent(self, event):
+        self._save_state()
+        super().closeEvent(event)
 
 
 if __name__ == "__main__":
